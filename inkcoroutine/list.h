@@ -19,9 +19,20 @@ typedef struct ink_list_t {
   ink_list_item_t *_final_node;
 } ink_list_t;
 
+typedef void (*list_destroy_item)(void *);
+
+// 初始化
 extern int ink_list_init(ink_list_t* list, int capacity);
+
+// 入栈
 extern int ink_list_push(ink_list_t* list, void *data);
+
+// 出栈
 extern int ink_list_pop(ink_list_t* list, void **data);
+
+// 销毁
+extern int ink_list_destroy(ink_list_t* list, list_destroy_item destroy_func);
 extern int ink_list_size(const ink_list_t* list);
+extern int ink_list_capacity(const ink_list_t* list);
 
 #endif

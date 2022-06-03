@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <ucontext.h>
+#include "list.h"
 
 typedef struct schedule_thread_t {
   pthread_t thread_list;
@@ -10,7 +11,7 @@ typedef struct schedule_thread_t {
 } schedule_thread_t;
 
 typedef struct schedule_pipeline_t {
-  int capacity;
+  ink_list_t list;
 } schedule_pipeline_t;
 
 typedef struct schedule_context_t {
