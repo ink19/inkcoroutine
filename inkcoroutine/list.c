@@ -60,7 +60,7 @@ extern int ink_list_destroy(ink_list_t* list, list_destroy_item destroy_func) {
       destroy_func(data);
     }
   }
-  
+
   pthread_mutex_destroy(&(list->_rw_mutex));
   pthread_cond_destroy(&(list->_rw_cond));
   list->_size = 0;

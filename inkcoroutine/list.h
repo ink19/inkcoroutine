@@ -19,7 +19,7 @@ typedef struct ink_list_t {
   ink_list_item_t *_final_node;
 } ink_list_t;
 
-typedef void (*list_destroy_item)(void *);
+typedef int (*list_destroy_item)(void *);
 
 // 初始化
 extern int ink_list_init(ink_list_t* list, int capacity);
