@@ -1,0 +1,6 @@
+[submodule "3rdparty/c-vector"]
+	path = 3rdparty/c-vector
+	url = git@github.com:eteran/c-vector.git
+[submodule "3rdparty/list"]
+	path = 3rdparty/list
+	url = git@github.com:clibs/list.git

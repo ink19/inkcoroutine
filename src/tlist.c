@@ -1,4 +1,4 @@
-#include "list.h"
+#include "tlist.h"
 
 #include <stdlib.h>
 
@@ -8,7 +8,7 @@ extern int ink_list_init(ink_list_t* list, int capacity) {
   list->_list.next = NULL;
   list->_size = 0;
   list->_capacity = capacity;
-  list->_final_node = &list->_list;
+  list->_final_node = &(list->_list);
   return 0;
 }
 
@@ -24,9 +24,9 @@ extern int ink_list_push(ink_list_t *list, void *data) {
   list->_final_node->next = tnode;
   list->_final_node = tnode;
   list->_size += 1;
+
   pthread_mutex_unlock(&(list->_rw_mutex));
   pthread_cond_broadcast(&(list->_rw_cond));
-
   return 0;
 }
 
@@ -39,7 +39,11 @@ extern int ink_list_pop(ink_list_t* list, void **data) {
   ink_list_item_t* tnode = list->_list.next;
   list->_list.next = tnode->next;
   *data = tnode->data;
-  list->_size--;
+
+  list->_size -= 1;
+  if (list->_size == 0) {
+    list->_final_node = &(list->_list);
+  }
   free(tnode);
 
   pthread_mutex_unlock(&(list->_rw_mutex));
