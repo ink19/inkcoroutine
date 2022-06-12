@@ -21,6 +21,6 @@ int main() {
 
   schedule_run(sch, run_context1, chan1);
   schedule_run(sch, run_context2, chan1);
-  sleep(2);
+  schedule_join(sch);
   return 0;
 }

@@ -17,10 +17,20 @@ struct schedule_running_t;
 struct schedule_channel_t;
 struct schedule_t;
 
+enum SCHEDULE_CONTEXT_RUNNING_STATUS {
+  SCHEDULE_CONTEXT_RUNNING_STATUS_READY = 0,
+  SCHEDULE_CONTEXT_RUNNING_STATUS_RUNNING,
+  SCHEDULE_CONTEXT_RUNNING_STATUS_WAIT, // 等待
+  SCHEDULE_CONTEXT_RUNNING_STATUS_FINISH
+};
+
 // 调度的上下文
 typedef struct schedule_context_t {
   ucontext_t *base_context;
   struct schedule_running_t *running;
+
+  enum SCHEDULE_CONTEXT_RUNNING_STATUS running_status;
+  struct schedule_t *sch;
 } schedule_context_t;
 
 // 调度线程
@@ -70,6 +80,9 @@ typedef struct schedule_t {
 
   schedule_context_t **context_list;
   int context_number;
+  int finish_context_number;
+  pthread_mutex_t finish_context_mutex;
+  pthread_cond_t finish_context_cond;
 
   ink_list_t *ready_context_list;
   pthread_cond_t wait_cond;
@@ -81,5 +94,6 @@ extern schedule_channel_t *schedule_channel_init(int max_capacity);
 extern void *schedule_channel_pop(schedule_running_t*running, schedule_channel_t* chan);
 extern void schedule_channel_push(schedule_running_t*running, schedule_channel_t* chan, void *data);
 extern void schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg);
+extern void schedule_join(schedule_t *sch);
 
 #endif

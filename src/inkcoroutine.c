@@ -13,13 +13,27 @@ int ink_swap_context(schedule_context_t* save_context, const schedule_context_t*
 
 int ink_swap_out_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
   save_context->running->running_thread = NULL;
+  save_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_WAIT;
   ink_swap_context(save_context, thread_obj->context);
   return 0;
 }
 
 int ink_swap_in_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
   save_context->running->running_thread = thread_obj;
+  save_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_RUNNING;
   ink_swap_context(thread_obj->context, save_context);
+  return 0;
+}
+
+int ink_context_finish(schedule_context_t *context) {
+  context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_FINISH;
+  
+  // 提醒finish事件
+  pthread_mutex_lock(&(context->sch->finish_context_mutex));
+  context->sch->finish_context_number++;
+  pthread_mutex_unlock(&(context->sch->finish_context_mutex));
+
+  pthread_cond_broadcast(&(context->sch->finish_context_cond));
   return 0;
 }
 
@@ -73,6 +87,9 @@ extern schedule_t* schedule_init(int thread_num) {
 
   pthread_cond_init(&(sch->wait_cond), NULL);
   pthread_mutex_init(&(sch->thread_mutex), NULL);
+  pthread_cond_init(&(sch->finish_context_cond), NULL);
+  pthread_mutex_init(&(sch->finish_context_mutex), NULL);
+
   schedule_thread_init(sch);
   return sch;
 }
@@ -80,7 +97,7 @@ extern schedule_t* schedule_init(int thread_num) {
 void ink_context_wapper(schedule_running_t *running, schedule_run_func_t run_func, void *arg) {
   printf("Begin Context\n");
   run_func(running, arg);
-  printf("End Context\n");
+  ink_context_finish(running->running_context);
   // swap to thread
   ink_swap_out_context(running->running_context, running->running_thread);
 }
@@ -96,6 +113,8 @@ extern void schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *ar
   schedule_context_t *sct = (schedule_context_t *)malloc(sizeof(schedule_context_t));
   sct->base_context = my_context;
   sct->running = running;
+  sct->sch = sch;
+  sct->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_READY;
   running->running_context = sct;
   running->running_thread = NULL;
   running->sch = sch;
@@ -128,6 +147,7 @@ extern void schedule_channel_notify(schedule_t *scht, list_t *notify_list) {
   list_node_t *ready_node;
   while ((ready_node = list_lpop(notify_list)) != NULL) {
     schedule_context_t *ready_context = (schedule_context_t *)(ready_node->val);
+    ready_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_READY;
     ink_list_push(scht->ready_context_list, ready_context);
     LIST_FREE(ready_node);
   }
@@ -176,4 +196,12 @@ extern void schedule_channel_push(schedule_running_t*running, schedule_channel_t
   schedule_channel_notify(running->sch, chan->read_wait);
   pthread_mutex_unlock(&(chan->mutex));
   return;
+}
+
+extern void schedule_join(schedule_t *sch) {
+  pthread_mutex_lock(&(sch->finish_context_mutex));
+  while (sch->finish_context_number != sch->context_number) {
+    pthread_cond_wait(&(sch->finish_context_cond), &(sch->finish_context_mutex));
+  }
+  pthread_mutex_unlock(&(sch->finish_context_mutex));
 }
