@@ -6,11 +6,12 @@
 #define LIST_MAX_SIZE 1024
 #define STACK_SIZE (10 * 1024 * 1024)
 
-
+// 切换上下文
 int ink_swap_context(schedule_context_t* save_context, const schedule_context_t* to_context) {
   return swapcontext((save_context->base_context), (to_context->base_context));
 }
 
+// 切换出，等待执行程序
 int ink_swap_out_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
   save_context->running->running_thread = NULL;
   save_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_WAIT;
@@ -18,6 +19,7 @@ int ink_swap_out_context(schedule_context_t *save_context, schedule_thread_t* th
   return 0;
 }
 
+// 切换入，开始执行程序
 int ink_swap_in_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
   save_context->running->running_thread = thread_obj;
   save_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_RUNNING;
@@ -25,6 +27,7 @@ int ink_swap_in_context(schedule_context_t *save_context, schedule_thread_t* thr
   return 0;
 }
 
+// 完成程序时的收尾工作
 int ink_context_finish(schedule_context_t *context) {
   context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_FINISH;
   
@@ -37,6 +40,7 @@ int ink_context_finish(schedule_context_t *context) {
   return 0;
 }
 
+// 开始一个线程
 void* ink_thread_run(schedule_t *schedule) {
   // 生成线程结构体
   ucontext_t* tc = (ucontext_t*)malloc(sizeof(ucontext_t));
@@ -63,6 +67,7 @@ void* ink_thread_run(schedule_t *schedule) {
   return NULL;
 }
 
+// 开始所有的线程
 void schedule_thread_init(schedule_t *sch) {
   for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
     pthread_t thread;
@@ -94,8 +99,8 @@ extern schedule_t* schedule_init(int thread_num) {
   return sch;
 }
 
+// 运行程序的包装
 void ink_context_wapper(schedule_running_t *running, schedule_run_func_t run_func, void *arg) {
-  printf("Begin Context\n");
   run_func(running, arg);
   ink_context_finish(running->running_context);
   // swap to thread
@@ -137,6 +142,7 @@ extern schedule_channel_t *schedule_channel_init(int max_capacity) {
   result->size = 0;
   result->read_wait = list_new();
   result->write_wait = list_new();
+  result->status = SCHEDULE_CHANNEL_STATUS_ACTIVE;
 
   pthread_mutex_init(&(result->mutex), NULL);
   return result;
@@ -156,7 +162,7 @@ extern void schedule_channel_notify(schedule_t *scht, list_t *notify_list) {
 
 extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_t *chan) {
   pthread_mutex_lock(&(chan->mutex));
-  while (chan->size <= 0) {
+  while (chan->size <= 0 && chan->status == SCHEDULE_CHANNEL_STATUS_ACTIVE) {
     // 挂起
     pthread_mutex_unlock(&(chan->mutex));
     list_node_t* wait_node = list_node_new(running->running_context);
@@ -165,7 +171,12 @@ extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_
     ink_swap_out_context(running->running_context, running->running_thread);
     pthread_mutex_lock(&(chan->mutex));
   }
-  
+
+  // 管道关闭，直接返回NULL
+  if (chan->status == SCHEDULE_CHANNEL_STATUS_FINISH && chan->size == 0) {
+    return NULL;
+  }
+
   // 获取内容并清理现场
   list_node_t* result_node = list_lpop(chan->data);
   void *result = result_node->val;
@@ -177,10 +188,11 @@ extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_
   return result;
 }
 
-extern void schedule_channel_push(schedule_running_t*running, schedule_channel_t* chan, void *data) {
+extern int schedule_channel_push(schedule_running_t*running, schedule_channel_t* chan, void *data) {
   pthread_mutex_lock(&chan->mutex);
 
-  while (chan->size >= chan->capacity) {
+  // 判断是否阻塞（管道达到上限），如果阻塞，则挂起程序
+  while (chan->size >= chan->capacity && chan->status == SCHEDULE_CHANNEL_STATUS_ACTIVE) {
     // 挂起
     pthread_mutex_unlock(&(chan->mutex));
     list_node_t* wait_node = list_node_new(running->running_context);
@@ -189,13 +201,18 @@ extern void schedule_channel_push(schedule_running_t*running, schedule_channel_t
     ink_swap_out_context(running->running_context, running->running_thread);
     pthread_mutex_lock(&(chan->mutex));
   }
+
+  // 管道关闭，无法写入
+  if (chan->status == SCHEDULE_CHANNEL_STATUS_FINISH) {
+    return 1;
+  }
   list_node_t *node_data = list_node_new(data);
   list_rpush(chan->data, node_data);
 
   chan->size += 1;
   schedule_channel_notify(running->sch, chan->read_wait);
   pthread_mutex_unlock(&(chan->mutex));
-  return;
+  return 0;
 }
 
 extern void schedule_join(schedule_t *sch) {
@@ -204,4 +221,14 @@ extern void schedule_join(schedule_t *sch) {
     pthread_cond_wait(&(sch->finish_context_cond), &(sch->finish_context_mutex));
   }
   pthread_mutex_unlock(&(sch->finish_context_mutex));
+}
+
+extern int schedule_channel_close(schedule_running_t* running, schedule_channel_t* chan) {
+  // 将管道标记为完成
+  chan->status = SCHEDULE_CHANNEL_STATUS_FINISH;
+
+  // 将所有等待该管道的协程都移到等待区
+  schedule_channel_notify(running->sch, chan->read_wait);
+  schedule_channel_notify(running->sch, chan->write_wait);
+  return 0;
 }

@@ -5,13 +5,20 @@
 #include <unistd.h>
 
 int run_context1(schedule_running_t *a, schedule_channel_t *p) {
-  void *data = schedule_channel_pop(a, p);
-  printf("%d\n", data);
+  int *pi;
+  while ((pi = schedule_channel_pop(a, p)) != NULL) {
+    printf("%d\n", *pi);
+    free(pi);
+  }
+  printf("Hello\n");
   return 0;
 }
 
 int run_context2(schedule_running_t *a, schedule_channel_t *p) {
-  schedule_channel_push(a, p, 123);
+  int *data = (void *)malloc(sizeof(int));
+  *data = 123;
+  schedule_channel_push(a, p, data);
+  schedule_channel_close(a, p);
   return 0;
 }
 

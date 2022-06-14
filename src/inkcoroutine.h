@@ -18,7 +18,8 @@ struct schedule_channel_t;
 struct schedule_t;
 
 enum SCHEDULE_CONTEXT_RUNNING_STATUS {
-  SCHEDULE_CONTEXT_RUNNING_STATUS_READY = 0,
+  SCHEDULE_CONTEXT_RUNNING_STATUS_UNINIT = 0,
+  SCHEDULE_CONTEXT_RUNNING_STATUS_READY,
   SCHEDULE_CONTEXT_RUNNING_STATUS_RUNNING,
   SCHEDULE_CONTEXT_RUNNING_STATUS_WAIT, // 等待
   SCHEDULE_CONTEXT_RUNNING_STATUS_FINISH
@@ -56,6 +57,12 @@ typedef struct schedule_running_t {
 // 协程函数类型
 typedef void (* schedule_run_func_t)(schedule_running_t *running, void *args);
 
+enum SCHEDULE_CHANNEL_STATUS {
+  SCHEDULE_CHANNEL_STATUS_UNINIT = 0,
+  SCHEDULE_CHANNEL_STATUS_ACTIVE,
+  SCHEDULE_CHANNEL_STATUS_FINISH
+};
+
 // 管道类型
 typedef struct schedule_channel_t {
   int capacity;
@@ -67,6 +74,7 @@ typedef struct schedule_channel_t {
   list_t* read_wait;
   list_t* write_wait;
 
+  enum SCHEDULE_CHANNEL_STATUS status;
   pthread_mutex_t mutex;
 } schedule_channel_t;
 
@@ -90,10 +98,13 @@ typedef struct schedule_t {
 } schedule_t;
 
 extern schedule_t* schedule_init(int thread_num);
-extern schedule_channel_t *schedule_channel_init(int max_capacity);
-extern void *schedule_channel_pop(schedule_running_t*running, schedule_channel_t* chan);
-extern void schedule_channel_push(schedule_running_t*running, schedule_channel_t* chan, void *data);
 extern void schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg);
 extern void schedule_join(schedule_t *sch);
+
+// 管道相关
+extern schedule_channel_t *schedule_channel_init(int max_capacity);
+extern void *schedule_channel_pop(schedule_running_t* running, schedule_channel_t* chan);
+extern int schedule_channel_push(schedule_running_t* running, schedule_channel_t* chan, void *data);
+extern int schedule_channel_close(schedule_running_t* running, schedule_channel_t* chan);
 
 #endif
