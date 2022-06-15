@@ -17,6 +17,9 @@ struct schedule_running_t;
 struct schedule_channel_t;
 struct schedule_t;
 
+#define INK_SCHEDULE_ALLOC(psize) (malloc(psize))
+#define INK_SCHEDULE_FREE(p) (free(p))
+
 enum SCHEDULE_CONTEXT_RUNNING_STATUS {
   SCHEDULE_CONTEXT_RUNNING_STATUS_UNINIT = 0,
   SCHEDULE_CONTEXT_RUNNING_STATUS_READY,
@@ -29,10 +32,17 @@ enum SCHEDULE_CONTEXT_RUNNING_STATUS {
 typedef struct schedule_context_t {
   ucontext_t *base_context;
   struct schedule_running_t *running;
+  void *base_stack;
 
   enum SCHEDULE_CONTEXT_RUNNING_STATUS running_status;
   struct schedule_t *sch;
 } schedule_context_t;
+
+enum SCHEDULE_CONTEXT_THREAD_STATUS {
+  SCHEDULE_CONTEXT_THREAD_STATUS_UNINIT = 0,
+  SCHEDULE_CONTEXT_THREAD_STATUS_RUNNING,
+  SCHEDULE_CONTEXT_THREAD_STATUS_FINISH
+};
 
 // 调度线程
 typedef struct schedule_thread_t {
@@ -40,8 +50,8 @@ typedef struct schedule_thread_t {
   schedule_context_t *context;
 
   // 等待的管道
-  struct schedule_channel_t *wait_channel;
-  int continue_flag;
+  // struct schedule_channel_t *wait_channel;
+  enum SCHEDULE_CONTEXT_THREAD_STATUS status;
 } schedule_thread_t;
 
 // 运行时保存的数据
@@ -83,11 +93,10 @@ typedef struct schedule_t {
   schedule_thread_t **thread_list;
   int thread_number;
 
-  schedule_channel_t **pipeline_list;
-  int pipeline_number;
-
   schedule_context_t **context_list;
   int context_number;
+
+  // TODO 清理出一个WaitGroup库
   int finish_context_number;
   pthread_mutex_t finish_context_mutex;
   pthread_cond_t finish_context_cond;
@@ -98,11 +107,13 @@ typedef struct schedule_t {
 } schedule_t;
 
 extern schedule_t* schedule_init(int thread_num);
-extern void schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg);
-extern void schedule_join(schedule_t *sch);
+extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg);
+extern int schedule_join(schedule_t *sch);
+extern int schedule_destroy(schedule_t *sch);
 
 // 管道相关
 extern schedule_channel_t *schedule_channel_init(int max_capacity);
+extern int schedule_channel_destroy(schedule_channel_t *chan);
 extern void *schedule_channel_pop(schedule_running_t* running, schedule_channel_t* chan);
 extern int schedule_channel_push(schedule_running_t* running, schedule_channel_t* chan, void *data);
 extern int schedule_channel_close(schedule_running_t* running, schedule_channel_t* chan);

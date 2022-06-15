@@ -19,6 +19,20 @@ int ink_swap_out_context(schedule_context_t *save_context, schedule_thread_t* th
   return 0;
 }
 
+int ink_context_destroy(schedule_context_t *context) {
+  INK_SCHEDULE_FREE(context->base_context);
+
+  if (context->base_stack != NULL) {
+    INK_SCHEDULE_FREE(context->base_stack);
+  }
+
+  if (context->running != NULL) {
+    INK_SCHEDULE_FREE(context->running);
+  }
+
+  return 0;
+}
+
 // 切换入，开始执行程序
 int ink_swap_in_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
   save_context->running->running_thread = thread_obj;
@@ -40,62 +54,70 @@ int ink_context_finish(schedule_context_t *context) {
   return 0;
 }
 
+int ink_thread_destroy(schedule_thread_t *scht) {
+  ink_context_destroy(scht->context);
+  INK_SCHEDULE_FREE(scht->context);
+  return 0;
+}
+
 // 开始一个线程
 void* ink_thread_run(schedule_t *schedule) {
   // 生成线程结构体
-  ucontext_t* tc = (ucontext_t*)malloc(sizeof(ucontext_t));
+  ucontext_t* tc = (ucontext_t*)INK_SCHEDULE_ALLOC(sizeof(ucontext_t));
   getcontext(tc);
 
-  schedule_thread_t* scht = (schedule_thread_t*)malloc(sizeof(schedule_thread_t));
-  scht->context = (schedule_context_t *)malloc(sizeof(schedule_context_t));
+  schedule_thread_t* scht = (schedule_thread_t*)INK_SCHEDULE_ALLOC(sizeof(schedule_thread_t));
+  scht->context = (schedule_context_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t));
+  scht->context->base_stack = NULL;
+  scht->context->sch = schedule;
+  scht->context->running = NULL;
   scht->context->base_context = tc;
   scht->base_thread = pthread_self();
-  scht->continue_flag = 1;
+  scht->status = SCHEDULE_CONTEXT_THREAD_STATUS_RUNNING;
   
   pthread_mutex_lock(&(schedule->thread_mutex));
   int scht_id = schedule->thread_number;
   schedule->thread_list[schedule->thread_number++] = scht;
   pthread_mutex_unlock(&(schedule->thread_mutex));
 
-  while (scht->continue_flag) {
+  while (scht->status == SCHEDULE_CONTEXT_THREAD_STATUS_RUNNING) {
     // 获得下一个准备执行的上下文
     schedule_context_t *next_context;
     ink_list_pop(schedule->ready_context_list, (void **)&next_context);
-    
-    ink_swap_in_context(next_context, scht);
+    if (next_context != NULL) {
+      ink_swap_in_context(next_context, scht);
+    }
   }
   return NULL;
 }
 
 // 开始所有的线程
-void schedule_thread_init(schedule_t *sch) {
-  for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
+void schedule_thread_init(schedule_t *sch, int thread_num) {
+  sch->thread_number = 0;
+  for (int loop_i = 0; loop_i < thread_num; ++loop_i) {
     pthread_t thread;
-    pthread_create(&thread, NULL, ink_thread_run, sch);
+    pthread_create(&thread, NULL, &ink_thread_run, sch);
   }
 }
 
 // 初始化
 extern schedule_t* schedule_init(int thread_num) {
-  schedule_t* sch = (schedule_t *)malloc(sizeof(schedule_t));
-  sch->context_list = (schedule_context_t**)malloc(sizeof(schedule_context_t*) * LIST_MAX_SIZE);
+  schedule_t* sch = (schedule_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_t));
+  sch->context_list = (schedule_context_t**)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t*) * LIST_MAX_SIZE);
   sch->context_number = 0;
 
-  sch->thread_list = (schedule_thread_t**)malloc(sizeof(schedule_thread_t*) * LIST_MAX_SIZE);
-  sch->thread_number = thread_num;
+  sch->thread_list = (schedule_thread_t**)INK_SCHEDULE_ALLOC(sizeof(schedule_thread_t*) * LIST_MAX_SIZE);
 
-  sch->pipeline_list = (schedule_channel_t**)malloc(sizeof(schedule_channel_t*) * LIST_MAX_SIZE);
-  sch->pipeline_number = 0;
-
-  sch->ready_context_list = (ink_list_t *)malloc(sizeof(ink_list_t));
+  sch->ready_context_list = (ink_list_t *)INK_SCHEDULE_ALLOC(sizeof(ink_list_t));
   ink_list_init(sch->ready_context_list, LIST_MAX_SIZE);
+  sch->finish_context_number = 0;
 
   pthread_cond_init(&(sch->wait_cond), NULL);
   pthread_mutex_init(&(sch->thread_mutex), NULL);
   pthread_cond_init(&(sch->finish_context_cond), NULL);
   pthread_mutex_init(&(sch->finish_context_mutex), NULL);
 
-  schedule_thread_init(sch);
+  schedule_thread_init(sch, thread_num);
   return sch;
 }
 
@@ -107,15 +129,17 @@ void ink_context_wapper(schedule_running_t *running, schedule_run_func_t run_fun
   ink_swap_out_context(running->running_context, running->running_thread);
 }
 
-extern void schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg) {
-  ucontext_t *my_context = (ucontext_t *)malloc(sizeof(ucontext_t));
+extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg) {
+  ucontext_t *my_context = (ucontext_t *)INK_SCHEDULE_ALLOC(sizeof(ucontext_t));
   getcontext(my_context);
   my_context->uc_stack.ss_size = STACK_SIZE;
-  my_context->uc_stack.ss_sp = malloc(STACK_SIZE);
+  void *con_stack =  INK_SCHEDULE_ALLOC(STACK_SIZE);
+  my_context->uc_stack.ss_sp = con_stack;
   my_context->uc_link = NULL;
-  schedule_running_t *running = (schedule_running_t *)malloc(sizeof(schedule_running_t));
+  schedule_running_t *running = (schedule_running_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_running_t));
 
-  schedule_context_t *sct = (schedule_context_t *)malloc(sizeof(schedule_context_t));
+  schedule_context_t *sct = (schedule_context_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t));
+  sct->base_stack = con_stack;
   sct->base_context = my_context;
   sct->running = running;
   sct->sch = sch;
@@ -132,11 +156,12 @@ extern void schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *ar
 
   // 添加到ready_list
   ink_list_push(sch->ready_context_list, sct);
+  return 0;
 }
 
 // 创建管道
 extern schedule_channel_t *schedule_channel_init(int max_capacity) {
-  schedule_channel_t *result = (schedule_channel_t *)malloc(sizeof(schedule_channel_t));
+  schedule_channel_t *result = (schedule_channel_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_channel_t));
   result->capacity = max_capacity;
   result->data = list_new();
   result->size = 0;
@@ -215,12 +240,13 @@ extern int schedule_channel_push(schedule_running_t*running, schedule_channel_t*
   return 0;
 }
 
-extern void schedule_join(schedule_t *sch) {
+extern int schedule_join(schedule_t *sch) {
   pthread_mutex_lock(&(sch->finish_context_mutex));
   while (sch->finish_context_number != sch->context_number) {
     pthread_cond_wait(&(sch->finish_context_cond), &(sch->finish_context_mutex));
   }
   pthread_mutex_unlock(&(sch->finish_context_mutex));
+  return 0;
 }
 
 extern int schedule_channel_close(schedule_running_t* running, schedule_channel_t* chan) {
@@ -230,5 +256,52 @@ extern int schedule_channel_close(schedule_running_t* running, schedule_channel_
   // 将所有等待该管道的协程都移到等待区
   schedule_channel_notify(running->sch, chan->read_wait);
   schedule_channel_notify(running->sch, chan->write_wait);
+  return 0;
+}
+
+extern int schedule_destroy(schedule_t *sch) {
+  // 关闭线程
+  for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
+    sch->thread_list[loop_i]->status = SCHEDULE_CONTEXT_THREAD_STATUS_FINISH;
+  }
+
+  for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
+    ink_list_push(sch->ready_context_list, NULL);
+  }
+
+  for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
+    pthread_join(sch->thread_list[loop_i]->base_thread, NULL);
+  }
+
+  for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
+    ink_thread_destroy(sch->thread_list[loop_i]);
+    INK_SCHEDULE_FREE(sch->thread_list[loop_i]);
+  }
+  pthread_mutex_destroy(&(sch->thread_mutex));
+  INK_SCHEDULE_FREE(sch->thread_list);
+
+  for (int loop_i = 0; loop_i < sch->context_number; ++loop_i) {
+    ink_context_destroy(sch->context_list[loop_i]);
+    INK_SCHEDULE_FREE(sch->context_list[loop_i]);
+  }
+  pthread_mutex_destroy(&(sch->finish_context_mutex));
+  pthread_cond_destroy(&(sch->finish_context_cond));
+  pthread_cond_destroy(&(sch->wait_cond));
+  INK_SCHEDULE_FREE(sch->context_list);  
+
+  // 清理各种list
+  ink_list_destroy(sch->ready_context_list, NULL);
+  INK_SCHEDULE_FREE(sch->ready_context_list);
+
+  INK_SCHEDULE_FREE(sch);
+  return 0;
+}
+
+extern int schedule_channel_destroy(schedule_channel_t *chan) {
+  pthread_mutex_destroy(&(chan->mutex));
+  list_destroy(chan->data);
+  list_destroy(chan->read_wait);
+  list_destroy(chan->write_wait);
+  INK_SCHEDULE_FREE(chan);
   return 0;
 }

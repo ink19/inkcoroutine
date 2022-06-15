@@ -1,0 +1,6 @@
+make --dry-run --always-make --keep-going --print-directory
+make: Entering directory '/home/ink19/cpp_laboratory/c_go'
+make: Leaving directory '/home/ink19/cpp_laboratory/c_go'
+ 
+make: *** No targets specified and no makefile found.  Stop.
+

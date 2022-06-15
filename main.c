@@ -29,5 +29,7 @@ int main() {
   schedule_run(sch, run_context1, chan1);
   schedule_run(sch, run_context2, chan1);
   schedule_join(sch);
+  schedule_destroy(sch);
+  schedule_channel_destroy(chan1);
   return 0;
 }
