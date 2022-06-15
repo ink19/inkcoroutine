@@ -30,6 +30,13 @@ int ink_context_destroy(schedule_context_t *context) {
     INK_SCHEDULE_FREE(context->running);
   }
 
+  // 删除defer list 
+  int defer_list_len = cvector_size(context->defer_list);
+  for (int loop_i = 0; loop_i < defer_list_len; ++loop_i) {
+    free(context->defer_list[loop_i]);
+  }
+  cvector_free(context->defer_list);
+
   return 0;
 }
 
@@ -101,8 +108,7 @@ void schedule_thread_init(schedule_t *sch, int thread_num) {
 }
 
 // 初始化
-extern schedule_t* schedule_init(int thread_num) {
-  schedule_t* sch = (schedule_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_t));
+extern int schedule_init(schedule_t *sch, int thread_num) {
   sch->context_list = (schedule_context_t**)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t*) * LIST_MAX_SIZE);
   sch->context_number = 0;
 
@@ -121,10 +127,22 @@ extern schedule_t* schedule_init(int thread_num) {
   return sch;
 }
 
+int ink_context_defer_list_run(schedule_running_t *running) {
+  int defer_list_size = cvector_size(running->running_context->defer_list);
+  for (int loop_i = 0; loop_i < defer_list_size; ++loop_i) {
+    running->running_context->defer_list[loop_i]->run_func(running, running->running_context->defer_list[loop_i]->args);
+  }
+  return 0;
+}
+
 // 运行程序的包装
 void ink_context_wapper(schedule_running_t *running, schedule_run_func_t run_func, void *arg) {
   run_func(running, arg);
   ink_context_finish(running->running_context);
+
+  // 运行defer的内容
+  ink_context_defer_list_run(running);
+
   // swap to thread
   ink_swap_out_context(running->running_context, running->running_thread);
 }
@@ -144,10 +162,11 @@ extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg
   sct->running = running;
   sct->sch = sch;
   sct->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_READY;
+  sct->defer_list = NULL;
   running->running_context = sct;
   running->running_thread = NULL;
   running->sch = sch;
-  makecontext(my_context, ink_context_wapper, 3, running, run_func,arg);
+  makecontext(my_context, ink_context_wapper, 3, running, run_func, arg);
 
   pthread_mutex_lock(&(sch->thread_mutex));
   sch->context_list[sch->context_number] = sct;
@@ -159,18 +178,25 @@ extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg
   return 0;
 }
 
-// 创建管道
-extern schedule_channel_t *schedule_channel_init(int max_capacity) {
-  schedule_channel_t *result = (schedule_channel_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_channel_t));
-  result->capacity = max_capacity;
-  result->data = list_new();
-  result->size = 0;
-  result->read_wait = list_new();
-  result->write_wait = list_new();
-  result->status = SCHEDULE_CHANNEL_STATUS_ACTIVE;
+extern int schedule_context_defer(schedule_running_t *running, schedule_run_func_t run_func, void *arg) {
+  schedule_context_defer_callable_t *defer_callable = (schedule_context_defer_callable_t *)malloc(sizeof(schedule_context_defer_callable_t));
+  defer_callable->run_func = run_func;
+  defer_callable->args = arg;
+  cvector_push_back(running->running_context->defer_list, defer_callable);
+  return 0;
+}
 
-  pthread_mutex_init(&(result->mutex), NULL);
-  return result;
+// 创建管道
+extern int schedule_channel_init(schedule_channel_t *chan, int max_capacity) {
+  chan->capacity = max_capacity;
+  chan->data = list_new();
+  chan->size = 0;
+  chan->read_wait = list_new();
+  chan->write_wait = list_new();
+  chan->status = SCHEDULE_CHANNEL_STATUS_ACTIVE;
+
+  pthread_mutex_init(&(chan->mutex), NULL);
+  return 0;
 }
 
 extern void schedule_channel_notify(schedule_t *scht, list_t *notify_list) {
@@ -213,7 +239,7 @@ extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_
   return result;
 }
 
-extern int schedule_channel_push(schedule_running_t*running, schedule_channel_t* chan, void *data) {
+extern int schedule_channel_push(schedule_running_t *running, schedule_channel_t* chan, void *data) {
   pthread_mutex_lock(&chan->mutex);
 
   // 判断是否阻塞（管道达到上限），如果阻塞，则挂起程序
@@ -293,7 +319,6 @@ extern int schedule_destroy(schedule_t *sch) {
   ink_list_destroy(sch->ready_context_list, NULL);
   INK_SCHEDULE_FREE(sch->ready_context_list);
 
-  INK_SCHEDULE_FREE(sch);
   return 0;
 }
 
@@ -302,6 +327,5 @@ extern int schedule_channel_destroy(schedule_channel_t *chan) {
   list_destroy(chan->data);
   list_destroy(chan->read_wait);
   list_destroy(chan->write_wait);
-  INK_SCHEDULE_FREE(chan);
   return 0;
 }

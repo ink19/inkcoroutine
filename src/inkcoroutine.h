@@ -15,6 +15,7 @@
 struct schedule_thread_t;
 struct schedule_running_t;
 struct schedule_channel_t;
+struct schedule_context_defer_callable_t;
 struct schedule_t;
 
 #define INK_SCHEDULE_ALLOC(psize) (malloc(psize))
@@ -33,6 +34,7 @@ typedef struct schedule_context_t {
   ucontext_t *base_context;
   struct schedule_running_t *running;
   void *base_stack;
+  cvector_vector_type(struct schedule_context_defer_callable_t *) defer_list;
 
   enum SCHEDULE_CONTEXT_RUNNING_STATUS running_status;
   struct schedule_t *sch;
@@ -66,6 +68,11 @@ typedef struct schedule_running_t {
 
 // 协程函数类型
 typedef void (* schedule_run_func_t)(schedule_running_t *running, void *args);
+
+typedef struct schedule_context_defer_callable_t {
+  schedule_run_func_t run_func;
+  void *args;
+} schedule_context_defer_callable_t;
 
 enum SCHEDULE_CHANNEL_STATUS {
   SCHEDULE_CHANNEL_STATUS_UNINIT = 0,
@@ -106,13 +113,14 @@ typedef struct schedule_t {
   pthread_mutex_t thread_mutex;
 } schedule_t;
 
-extern schedule_t* schedule_init(int thread_num);
+extern int schedule_init(schedule_t *sch, int thread_num);
 extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg);
 extern int schedule_join(schedule_t *sch);
 extern int schedule_destroy(schedule_t *sch);
+extern int schedule_context_defer(schedule_running_t *running, schedule_run_func_t run_func, void *arg);
 
 // 管道相关
-extern schedule_channel_t *schedule_channel_init(int max_capacity);
+extern int schedule_channel_init(schedule_channel_t *chan, int max_capacity);
 extern int schedule_channel_destroy(schedule_channel_t *chan);
 extern void *schedule_channel_pop(schedule_running_t* running, schedule_channel_t* chan);
 extern int schedule_channel_push(schedule_running_t* running, schedule_channel_t* chan, void *data);
