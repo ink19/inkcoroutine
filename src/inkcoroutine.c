@@ -7,27 +7,27 @@
 #define STACK_SIZE (10 * 1024 * 1024)
 
 // 切换上下文
-int ink_swap_context(schedule_context_t* save_context, const schedule_context_t* to_context) {
+int ink_swap_context(ink_coroutine_context_t* save_context, const ink_coroutine_context_t* to_context) {
   return swapcontext((save_context->base_context), (to_context->base_context));
 }
 
 // 切换出，等待执行程序
-int ink_swap_out_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
+int ink_swap_out_context(ink_coroutine_context_t *save_context, ink_coroutine_thread_t* thread_obj) {
   save_context->running->running_thread = NULL;
-  save_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_WAIT;
+  save_context->running_status = COROUTINE_CONTEXT_RUNNING_STATUS_WAIT;
   ink_swap_context(save_context, thread_obj->context);
   return 0;
 }
 
-int ink_context_destroy(schedule_context_t *context) {
-  INK_SCHEDULE_FREE(context->base_context);
+int ink_context_destroy(ink_coroutine_context_t *context) {
+  INK_COROUTINE_FREE(context->base_context);
 
   if (context->base_stack != NULL) {
-    INK_SCHEDULE_FREE(context->base_stack);
+    INK_COROUTINE_FREE(context->base_stack);
   }
 
   if (context->running != NULL) {
-    INK_SCHEDULE_FREE(context->running);
+    INK_COROUTINE_FREE(context->running);
   }
 
   // 删除defer list 
@@ -41,16 +41,16 @@ int ink_context_destroy(schedule_context_t *context) {
 }
 
 // 切换入，开始执行程序
-int ink_swap_in_context(schedule_context_t *save_context, schedule_thread_t* thread_obj) {
+int ink_swap_in_context(ink_coroutine_context_t *save_context, ink_coroutine_thread_t* thread_obj) {
   save_context->running->running_thread = thread_obj;
-  save_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_RUNNING;
+  save_context->running_status = COROUTINE_CONTEXT_RUNNING_STATUS_RUNNING;
   ink_swap_context(thread_obj->context, save_context);
   return 0;
 }
 
 // 完成程序时的收尾工作
-int ink_context_finish(schedule_context_t *context) {
-  context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_FINISH;
+int ink_context_finish(ink_coroutine_context_t *context) {
+  context->running_status = COROUTINE_CONTEXT_RUNNING_STATUS_FINISH;
   
   // 提醒finish事件
   pthread_mutex_lock(&(context->sch->finish_context_mutex));
@@ -61,36 +61,36 @@ int ink_context_finish(schedule_context_t *context) {
   return 0;
 }
 
-int ink_thread_destroy(schedule_thread_t *scht) {
+int ink_thread_destroy(ink_coroutine_thread_t *scht) {
   ink_context_destroy(scht->context);
-  INK_SCHEDULE_FREE(scht->context);
+  INK_COROUTINE_FREE(scht->context);
   return 0;
 }
 
 // 开始一个线程
-void* ink_thread_run(schedule_t *schedule) {
+void* ink_thread_run(ink_coroutine_t *ink_coroutine) {
   // 生成线程结构体
-  ucontext_t* tc = (ucontext_t*)INK_SCHEDULE_ALLOC(sizeof(ucontext_t));
+  ucontext_t* tc = (ucontext_t*)INK_COROUTINE_ALLOC(sizeof(ucontext_t));
   getcontext(tc);
 
-  schedule_thread_t* scht = (schedule_thread_t*)INK_SCHEDULE_ALLOC(sizeof(schedule_thread_t));
-  scht->context = (schedule_context_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t));
+  ink_coroutine_thread_t* scht = (ink_coroutine_thread_t*)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_thread_t));
+  scht->context = (ink_coroutine_context_t *)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_context_t));
   scht->context->base_stack = NULL;
-  scht->context->sch = schedule;
+  scht->context->sch = ink_coroutine;
   scht->context->running = NULL;
   scht->context->base_context = tc;
   scht->base_thread = pthread_self();
-  scht->status = SCHEDULE_CONTEXT_THREAD_STATUS_RUNNING;
+  scht->status = COROUTINE_CONTEXT_THREAD_STATUS_RUNNING;
   
-  pthread_mutex_lock(&(schedule->thread_mutex));
-  int scht_id = schedule->thread_number;
-  schedule->thread_list[schedule->thread_number++] = scht;
-  pthread_mutex_unlock(&(schedule->thread_mutex));
+  pthread_mutex_lock(&(ink_coroutine->thread_mutex));
+  int scht_id = ink_coroutine->thread_number;
+  ink_coroutine->thread_list[ink_coroutine->thread_number++] = scht;
+  pthread_mutex_unlock(&(ink_coroutine->thread_mutex));
 
-  while (scht->status == SCHEDULE_CONTEXT_THREAD_STATUS_RUNNING) {
+  while (scht->status == COROUTINE_CONTEXT_THREAD_STATUS_RUNNING) {
     // 获得下一个准备执行的上下文
-    schedule_context_t *next_context;
-    ink_list_pop(schedule->ready_context_list, (void **)&next_context);
+    ink_coroutine_context_t *next_context;
+    ink_list_pop(ink_coroutine->ready_context_list, (void **)&next_context);
     if (next_context != NULL) {
       ink_swap_in_context(next_context, scht);
     }
@@ -99,7 +99,7 @@ void* ink_thread_run(schedule_t *schedule) {
 }
 
 // 开始所有的线程
-void schedule_thread_init(schedule_t *sch, int thread_num) {
+void ink_coroutine_thread_init(ink_coroutine_t *sch, int thread_num) {
   sch->thread_number = 0;
   for (int loop_i = 0; loop_i < thread_num; ++loop_i) {
     pthread_t thread;
@@ -108,13 +108,13 @@ void schedule_thread_init(schedule_t *sch, int thread_num) {
 }
 
 // 初始化
-extern int schedule_init(schedule_t *sch, int thread_num) {
-  sch->context_list = (schedule_context_t**)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t*) * LIST_MAX_SIZE);
+extern int ink_coroutine_init(ink_coroutine_t *sch, int thread_num) {
+  sch->context_list = (ink_coroutine_context_t**)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_context_t*) * LIST_MAX_SIZE);
   sch->context_number = 0;
 
-  sch->thread_list = (schedule_thread_t**)INK_SCHEDULE_ALLOC(sizeof(schedule_thread_t*) * LIST_MAX_SIZE);
+  sch->thread_list = (ink_coroutine_thread_t**)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_thread_t*) * LIST_MAX_SIZE);
 
-  sch->ready_context_list = (ink_list_t *)INK_SCHEDULE_ALLOC(sizeof(ink_list_t));
+  sch->ready_context_list = (ink_list_t *)INK_COROUTINE_ALLOC(sizeof(ink_list_t));
   ink_list_init(sch->ready_context_list, LIST_MAX_SIZE);
   sch->finish_context_number = 0;
 
@@ -123,11 +123,11 @@ extern int schedule_init(schedule_t *sch, int thread_num) {
   pthread_cond_init(&(sch->finish_context_cond), NULL);
   pthread_mutex_init(&(sch->finish_context_mutex), NULL);
 
-  schedule_thread_init(sch, thread_num);
+  ink_coroutine_thread_init(sch, thread_num);
   return sch;
 }
 
-int ink_context_defer_list_run(schedule_running_t *running) {
+int ink_context_defer_list_run(ink_coroutine_running_t *running) {
   int defer_list_size = cvector_size(running->running_context->defer_list);
   for (int loop_i = 0; loop_i < defer_list_size; ++loop_i) {
     running->running_context->defer_list[loop_i]->run_func(running, running->running_context->defer_list[loop_i]->args);
@@ -136,7 +136,7 @@ int ink_context_defer_list_run(schedule_running_t *running) {
 }
 
 // 运行程序的包装
-void ink_context_wapper(schedule_running_t *running, schedule_run_func_t run_func, void *arg) {
+void ink_context_wapper(ink_coroutine_running_t *running, ink_coroutine_run_func_t run_func, void *arg) {
   run_func(running, arg);
   ink_context_finish(running->running_context);
 
@@ -147,21 +147,21 @@ void ink_context_wapper(schedule_running_t *running, schedule_run_func_t run_fun
   ink_swap_out_context(running->running_context, running->running_thread);
 }
 
-extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg) {
-  ucontext_t *my_context = (ucontext_t *)INK_SCHEDULE_ALLOC(sizeof(ucontext_t));
+extern int ink_coroutine_run(ink_coroutine_t *sch, ink_coroutine_run_func_t run_func, void *arg) {
+  ucontext_t *my_context = (ucontext_t *)INK_COROUTINE_ALLOC(sizeof(ucontext_t));
   getcontext(my_context);
   my_context->uc_stack.ss_size = STACK_SIZE;
-  void *con_stack =  INK_SCHEDULE_ALLOC(STACK_SIZE);
+  void *con_stack =  INK_COROUTINE_ALLOC(STACK_SIZE);
   my_context->uc_stack.ss_sp = con_stack;
   my_context->uc_link = NULL;
-  schedule_running_t *running = (schedule_running_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_running_t));
+  ink_coroutine_running_t *running = (ink_coroutine_running_t *)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_running_t));
 
-  schedule_context_t *sct = (schedule_context_t *)INK_SCHEDULE_ALLOC(sizeof(schedule_context_t));
+  ink_coroutine_context_t *sct = (ink_coroutine_context_t *)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_context_t));
   sct->base_stack = con_stack;
   sct->base_context = my_context;
   sct->running = running;
   sct->sch = sch;
-  sct->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_READY;
+  sct->running_status = COROUTINE_CONTEXT_RUNNING_STATUS_READY;
   sct->defer_list = NULL;
   running->running_context = sct;
   running->running_thread = NULL;
@@ -178,8 +178,8 @@ extern int schedule_run(schedule_t *sch, schedule_run_func_t run_func, void *arg
   return 0;
 }
 
-extern int schedule_context_defer(schedule_running_t *running, schedule_run_func_t run_func, void *arg) {
-  schedule_context_defer_callable_t *defer_callable = (schedule_context_defer_callable_t *)malloc(sizeof(schedule_context_defer_callable_t));
+extern int ink_coroutine_context_defer(ink_coroutine_running_t *running, ink_coroutine_run_func_t run_func, void *arg) {
+  ink_coroutine_context_defer_callable_t *defer_callable = (ink_coroutine_context_defer_callable_t *)malloc(sizeof(ink_coroutine_context_defer_callable_t));
   defer_callable->run_func = run_func;
   defer_callable->args = arg;
   cvector_push_back(running->running_context->defer_list, defer_callable);
@@ -187,33 +187,33 @@ extern int schedule_context_defer(schedule_running_t *running, schedule_run_func
 }
 
 // 创建管道
-extern int schedule_channel_init(schedule_channel_t *chan, int max_capacity) {
+extern int ink_coroutine_channel_init(ink_coroutine_channel_t *chan, int max_capacity) {
   chan->capacity = max_capacity;
   chan->data = list_new();
   chan->size = 0;
   chan->read_wait = list_new();
   chan->write_wait = list_new();
-  chan->status = SCHEDULE_CHANNEL_STATUS_ACTIVE;
+  chan->status = COROUTINE_CHANNEL_STATUS_ACTIVE;
 
   pthread_mutex_init(&(chan->mutex), NULL);
   return 0;
 }
 
-extern void schedule_channel_notify(schedule_t *scht, list_t *notify_list) {
+extern void ink_coroutine_channel_notify(ink_coroutine_t *scht, list_t *notify_list) {
   pthread_mutex_lock(&(scht->thread_mutex));
   list_node_t *ready_node;
   while ((ready_node = list_lpop(notify_list)) != NULL) {
-    schedule_context_t *ready_context = (schedule_context_t *)(ready_node->val);
-    ready_context->running_status = SCHEDULE_CONTEXT_RUNNING_STATUS_READY;
+    ink_coroutine_context_t *ready_context = (ink_coroutine_context_t *)(ready_node->val);
+    ready_context->running_status = COROUTINE_CONTEXT_RUNNING_STATUS_READY;
     ink_list_push(scht->ready_context_list, ready_context);
     LIST_FREE(ready_node);
   }
   pthread_mutex_unlock(&(scht->thread_mutex));
 }
 
-extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_t *chan) {
+extern void *ink_coroutine_channel_pop(ink_coroutine_running_t *running, ink_coroutine_channel_t *chan) {
   pthread_mutex_lock(&(chan->mutex));
-  while (chan->size <= 0 && chan->status == SCHEDULE_CHANNEL_STATUS_ACTIVE) {
+  while (chan->size <= 0 && chan->status == COROUTINE_CHANNEL_STATUS_ACTIVE) {
     // 挂起
     pthread_mutex_unlock(&(chan->mutex));
     list_node_t* wait_node = list_node_new(running->running_context);
@@ -224,7 +224,7 @@ extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_
   }
 
   // 管道关闭，直接返回NULL
-  if (chan->status == SCHEDULE_CHANNEL_STATUS_FINISH && chan->size == 0) {
+  if (chan->status == COROUTINE_CHANNEL_STATUS_FINISH && chan->size == 0) {
     return NULL;
   }
 
@@ -234,16 +234,16 @@ extern void *schedule_channel_pop(schedule_running_t *running, schedule_channel_
   LIST_FREE(result_node);
 
   chan->size -= 1;
-  schedule_channel_notify(running->sch, chan->write_wait);
+  ink_coroutine_channel_notify(running->sch, chan->write_wait);
   pthread_mutex_unlock(&(chan->mutex));
   return result;
 }
 
-extern int schedule_channel_push(schedule_running_t *running, schedule_channel_t* chan, void *data) {
+extern int ink_coroutine_channel_push(ink_coroutine_running_t *running, ink_coroutine_channel_t* chan, void *data) {
   pthread_mutex_lock(&chan->mutex);
 
   // 判断是否阻塞（管道达到上限），如果阻塞，则挂起程序
-  while (chan->size >= chan->capacity && chan->status == SCHEDULE_CHANNEL_STATUS_ACTIVE) {
+  while (chan->size >= chan->capacity && chan->status == COROUTINE_CHANNEL_STATUS_ACTIVE) {
     // 挂起
     pthread_mutex_unlock(&(chan->mutex));
     list_node_t* wait_node = list_node_new(running->running_context);
@@ -254,19 +254,19 @@ extern int schedule_channel_push(schedule_running_t *running, schedule_channel_t
   }
 
   // 管道关闭，无法写入
-  if (chan->status == SCHEDULE_CHANNEL_STATUS_FINISH) {
+  if (chan->status == COROUTINE_CHANNEL_STATUS_FINISH) {
     return 1;
   }
   list_node_t *node_data = list_node_new(data);
   list_rpush(chan->data, node_data);
 
   chan->size += 1;
-  schedule_channel_notify(running->sch, chan->read_wait);
+  ink_coroutine_channel_notify(running->sch, chan->read_wait);
   pthread_mutex_unlock(&(chan->mutex));
   return 0;
 }
 
-extern int schedule_join(schedule_t *sch) {
+extern int ink_coroutine_join(ink_coroutine_t *sch) {
   pthread_mutex_lock(&(sch->finish_context_mutex));
   while (sch->finish_context_number != sch->context_number) {
     pthread_cond_wait(&(sch->finish_context_cond), &(sch->finish_context_mutex));
@@ -275,20 +275,20 @@ extern int schedule_join(schedule_t *sch) {
   return 0;
 }
 
-extern int schedule_channel_close(schedule_running_t* running, schedule_channel_t* chan) {
+extern int ink_coroutine_channel_close(ink_coroutine_running_t* running, ink_coroutine_channel_t* chan) {
   // 将管道标记为完成
-  chan->status = SCHEDULE_CHANNEL_STATUS_FINISH;
+  chan->status = COROUTINE_CHANNEL_STATUS_FINISH;
 
   // 将所有等待该管道的协程都移到等待区
-  schedule_channel_notify(running->sch, chan->read_wait);
-  schedule_channel_notify(running->sch, chan->write_wait);
+  ink_coroutine_channel_notify(running->sch, chan->read_wait);
+  ink_coroutine_channel_notify(running->sch, chan->write_wait);
   return 0;
 }
 
-extern int schedule_destroy(schedule_t *sch) {
+extern int ink_coroutine_destroy(ink_coroutine_t *sch) {
   // 关闭线程
   for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
-    sch->thread_list[loop_i]->status = SCHEDULE_CONTEXT_THREAD_STATUS_FINISH;
+    sch->thread_list[loop_i]->status = COROUTINE_CONTEXT_THREAD_STATUS_FINISH;
   }
 
   for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
@@ -301,28 +301,28 @@ extern int schedule_destroy(schedule_t *sch) {
 
   for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
     ink_thread_destroy(sch->thread_list[loop_i]);
-    INK_SCHEDULE_FREE(sch->thread_list[loop_i]);
+    INK_COROUTINE_FREE(sch->thread_list[loop_i]);
   }
   pthread_mutex_destroy(&(sch->thread_mutex));
-  INK_SCHEDULE_FREE(sch->thread_list);
+  INK_COROUTINE_FREE(sch->thread_list);
 
   for (int loop_i = 0; loop_i < sch->context_number; ++loop_i) {
     ink_context_destroy(sch->context_list[loop_i]);
-    INK_SCHEDULE_FREE(sch->context_list[loop_i]);
+    INK_COROUTINE_FREE(sch->context_list[loop_i]);
   }
   pthread_mutex_destroy(&(sch->finish_context_mutex));
   pthread_cond_destroy(&(sch->finish_context_cond));
   pthread_cond_destroy(&(sch->wait_cond));
-  INK_SCHEDULE_FREE(sch->context_list);  
+  INK_COROUTINE_FREE(sch->context_list);  
 
   // 清理各种list
   ink_list_destroy(sch->ready_context_list, NULL);
-  INK_SCHEDULE_FREE(sch->ready_context_list);
+  INK_COROUTINE_FREE(sch->ready_context_list);
 
   return 0;
 }
 
-extern int schedule_channel_destroy(schedule_channel_t *chan) {
+extern int ink_coroutine_channel_destroy(ink_coroutine_channel_t *chan) {
   pthread_mutex_destroy(&(chan->mutex));
   list_destroy(chan->data);
   list_destroy(chan->read_wait);
