@@ -3,7 +3,7 @@
 
 #include <pthread.h>
 #include <ucontext.h>
-#include "tlist.h"
+#include "block_list.h"
 #include "list.h"
 
 #ifndef CVECTOR_LOGARITHMIC_GROWTH
@@ -108,7 +108,7 @@ typedef struct ink_coroutine_t {
   pthread_mutex_t finish_context_mutex;
   pthread_cond_t finish_context_cond;
 
-  ink_list_t *ready_context_list;
+  block_list_t *ready_context_list;
   pthread_cond_t wait_cond;
   pthread_mutex_t thread_mutex;
 } ink_coroutine_t;

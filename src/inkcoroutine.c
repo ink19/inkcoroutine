@@ -90,7 +90,7 @@ void* ink_thread_run(ink_coroutine_t *ink_coroutine) {
   while (scht->status == COROUTINE_CONTEXT_THREAD_STATUS_RUNNING) {
     // 获得下一个准备执行的上下文
     ink_coroutine_context_t *next_context;
-    ink_list_pop(ink_coroutine->ready_context_list, (void **)&next_context);
+    block_list_pop(ink_coroutine->ready_context_list, (void **)&next_context);
     if (next_context != NULL) {
       ink_swap_in_context(next_context, scht);
     }
@@ -103,7 +103,7 @@ void ink_coroutine_thread_init(ink_coroutine_t *sch, int thread_num) {
   sch->thread_number = 0;
   for (int loop_i = 0; loop_i < thread_num; ++loop_i) {
     pthread_t thread;
-    pthread_create(&thread, NULL, &ink_thread_run, sch);
+    pthread_create(&thread, NULL, (void *(*) (void *))&ink_thread_run, sch);
   }
 }
 
@@ -114,8 +114,8 @@ extern int ink_coroutine_init(ink_coroutine_t *sch, int thread_num) {
 
   sch->thread_list = (ink_coroutine_thread_t**)INK_COROUTINE_ALLOC(sizeof(ink_coroutine_thread_t*) * LIST_MAX_SIZE);
 
-  sch->ready_context_list = (ink_list_t *)INK_COROUTINE_ALLOC(sizeof(ink_list_t));
-  ink_list_init(sch->ready_context_list, LIST_MAX_SIZE);
+  sch->ready_context_list = (block_list_t *)INK_COROUTINE_ALLOC(sizeof(block_list_t));
+  block_list_init(sch->ready_context_list, LIST_MAX_SIZE);
   sch->finish_context_number = 0;
 
   pthread_cond_init(&(sch->wait_cond), NULL);
@@ -124,7 +124,7 @@ extern int ink_coroutine_init(ink_coroutine_t *sch, int thread_num) {
   pthread_mutex_init(&(sch->finish_context_mutex), NULL);
 
   ink_coroutine_thread_init(sch, thread_num);
-  return sch;
+  return 0;
 }
 
 int ink_context_defer_list_run(ink_coroutine_running_t *running) {
@@ -166,7 +166,7 @@ extern int ink_coroutine_run(ink_coroutine_t *sch, ink_coroutine_run_func_t run_
   running->running_context = sct;
   running->running_thread = NULL;
   running->sch = sch;
-  makecontext(my_context, ink_context_wapper, 3, running, run_func, arg);
+  makecontext(my_context, (void (*) (void))ink_context_wapper, 3, running, run_func, arg);
 
   pthread_mutex_lock(&(sch->thread_mutex));
   sch->context_list[sch->context_number] = sct;
@@ -174,7 +174,7 @@ extern int ink_coroutine_run(ink_coroutine_t *sch, ink_coroutine_run_func_t run_
   pthread_mutex_unlock(&(sch->thread_mutex));
 
   // 添加到ready_list
-  ink_list_push(sch->ready_context_list, sct);
+  block_list_push(sch->ready_context_list, sct);
   return 0;
 }
 
@@ -205,7 +205,7 @@ extern void ink_coroutine_channel_notify(ink_coroutine_t *scht, list_t *notify_l
   while ((ready_node = list_lpop(notify_list)) != NULL) {
     ink_coroutine_context_t *ready_context = (ink_coroutine_context_t *)(ready_node->val);
     ready_context->running_status = COROUTINE_CONTEXT_RUNNING_STATUS_READY;
-    ink_list_push(scht->ready_context_list, ready_context);
+    block_list_push(scht->ready_context_list, ready_context);
     LIST_FREE(ready_node);
   }
   pthread_mutex_unlock(&(scht->thread_mutex));
@@ -292,7 +292,7 @@ extern int ink_coroutine_destroy(ink_coroutine_t *sch) {
   }
 
   for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
-    ink_list_push(sch->ready_context_list, NULL);
+    block_list_push(sch->ready_context_list, NULL);
   }
 
   for (int loop_i = 0; loop_i < sch->thread_number; ++loop_i) {
@@ -316,7 +316,7 @@ extern int ink_coroutine_destroy(ink_coroutine_t *sch) {
   INK_COROUTINE_FREE(sch->context_list);  
 
   // 清理各种list
-  ink_list_destroy(sch->ready_context_list, NULL);
+  block_list_destroy(sch->ready_context_list, NULL);
   INK_COROUTINE_FREE(sch->ready_context_list);
 
   return 0;
